@@ -18,6 +18,7 @@ object OutputHandler {
     def saveAsSingleTextFile(path: String, codec: Class[_ <: CompressionCodec]): Unit =
       saveAsSingleTextFileInternal(path, Some(codec))
 
+    // TODO: Optimise this function
     private def copyMerge(
                            srcFS: FileSystem, srcDir: Path,
                            dstFS: FileSystem, dstFile: Path,
