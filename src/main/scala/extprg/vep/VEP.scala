@@ -1,22 +1,80 @@
 package extprg.vep
-
+import utils.{ArgumentOption, CommandBuilder, Tool}
+import scala.collection.mutable
 import org.apache.spark.sql.SparkSession
-import OutputHandler.RDDExtensions
+import utils.OutputHandler._
 
 object VEP {
+  val usage = """
+    You must input all parameters in usage to run this application
+    Usage: vep-spark  [--input_file hdfs_absolute_dir]
+                      [--output_file hdfs_absolute_dir]
+                      [--vep_dir absolute_dir]
+                      [--cache_dir absolute_dir]
+
+    Optional arguments:
+      All ensembl-vep arguments except "--cache", "--cache_dir", "--input_file", "--output_file"
+      NOTE: If you use any ensembl-vep's plugin, please add [--dir_plugins absolute_dir] option
+  """
   def main(args: Array[String]) {
     val spark = SparkSession.builder()
-      .appName("VEPSpark Application")
-      .master("yarn")
-      .getOrCreate()
-    // Arguments from cli
-    val input_path = "/input/sample.vcf"
-    val output_path = "/output/annotated_sample.vcf"
-    val number_partitions = 500
-    val cmd = "/home/ensembl-vep/vep --format vcf --no_stats --force_overwrite --cache --offline --vcf --vcf_info_field ANN --buffer_size 60000 --phased --hgvsg --hgvs --symbol --variant_class --biotype --gene_phenotype --regulatory --ccds --transcript_version --tsl --appris --canonical --protein --uniprot --domains --sift b --polyphen b --check_existing --af --max_af --af_1kg --af_gnomad --minimal --allele_number --pubmed --fasta /home/.vep/homo_sapiens/99_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz -o STDOUT"
-    //    val cmd = "/home/spark/ensembl-vep/vep --format vcf --no_stats --force_overwrite --cache --offline --vcf --vcf_info_field ANN --buffer_size 1000 --phased --hgvsg --hgvs --symbol --variant_class --biotype --gene_phenotype --regulatory --ccds --transcript_version --tsl --appris --canonical --protein --uniprot --domains --sift b --polyphen b --check_existing --af --max_af --af_1kg --af_gnomad --minimal --allele_number --pubmed --fasta /home/spark/.vep/homo_sapiens/95_GRCh38/Homo_sapiens.GRCh38.dna_sm.primary_assembly.fa.gz -o STDOUT"
-    val dataRDD = spark.sparkContext.textFile(input_path, minPartitions = number_partitions)
-    val pipeRDD = dataRDD.pipe(cmd)
-    pipeRDD.saveAsSingleTextFile(output_path)
+       .appName("VEPSpark Application")
+       .master("yarn")
+       .getOrCreate()
+    
+    // List of ensemnl-vep's options
+    val options: mutable.MutableList[ArgumentOption] = new mutable.MutableList[ArgumentOption]
+    val arglist = args.toList
+
+    type OptionMap = Map[String, Any]
+    @scala.annotation.tailrec
+    def nextOption(map : OptionMap, list: List[String]) : OptionMap = {
+      def isValue(s : String) = (s(0) != '-')
+      list match {
+        case Nil => map
+        case "--input_file" :: value :: tail =>
+          nextOption(map ++ Map("input_file" -> value), tail)
+        case "--output_file" :: value :: tail =>
+          nextOption(map ++ Map("output_file" -> value), tail)
+        case "--vep_dir" :: value :: tail =>
+          nextOption(map ++ Map("vep_dir" -> value), tail)
+        case "--cache_dir" :: value :: tail =>
+          nextOption(map ++ Map("cache_dir" -> value), tail)
+        case currentParam :: nextParam :: tail if isValue(nextParam) =>
+          options += new ArgumentOption(currentParam, nextParam, true)
+          nextOption(map, tail)
+        case currentParam :: nextParam :: tail if !isValue(nextParam) =>
+          options += new ArgumentOption(currentParam, null, false)
+          nextOption(map, list.tail)
+        case param :: Nil =>
+          options += new ArgumentOption(param, null, false)
+          nextOption(map, list.tail)
+        case option :: tail => println("Unknown option " + option)
+          sys.exit(1)
+      }
+    }
+
+    val defaultOptions = nextOption(Map(),arglist)
+    if (
+        !defaultOptions.contains("input_file") ||
+        !defaultOptions.contains("output_file") ||
+        !defaultOptions.contains("vep_dir") ||
+        !defaultOptions.contains("cache_dir")
+    ) {
+      print(usage)
+    } else {
+      val builder = new CommandBuilder(Tool.VEP, defaultOptions.get("vep_dir").mkString, options)
+      val cmd = builder.addOption("--cache", null, hasParameter = false)
+        .addOption("--dir_cache", defaultOptions.get("cache_dir").mkString, hasParameter = true)
+        .addOption("-o", "STDOUT", hasParameter = true)
+        .build()
+        .generate
+      val input_path = defaultOptions.get("input_file").mkString
+      val output_path = defaultOptions.get("output_file").mkString
+      val number_partitions = 500
+      val dataRDD = spark.sparkContext.textFile(input_path, minPartitions = number_partitions)
+      val pipeRDD = dataRDD.pipe(cmd)
+      pipeRDD.saveAsSingleTextFile(output_path)
+    }
   }
 }
