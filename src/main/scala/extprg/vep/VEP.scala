@@ -3,6 +3,7 @@ import utils.{ArgumentOption, CommandBuilder, Tool}
 import scala.collection.mutable
 import org.apache.spark.sql.SparkSession
 import utils.OutputHandler._
+import org.apache.spark.rdd.RDD
 
 object VEP {
   val usage = """
@@ -71,10 +72,25 @@ object VEP {
         .generate
       val input_path = defaultOptions.get("input_file").mkString
       val output_path = defaultOptions.get("output_file").mkString
-      val number_partitions = 500
-      val dataRDD = spark.sparkContext.textFile(input_path, minPartitions = number_partitions)
-      val pipeRDD = dataRDD.pipe(cmd)
-      pipeRDD.saveAsSingleTextFile(output_path)
+      val number_of_partitions = 500
+      val dataRDD = spark.sparkContext.textFile(input_path, minPartitions = number_of_partitions)
+      val (headerRDD, variantsRDD) = dataRDD.cache().filterDivisor(line => line.startsWith("#"))
+      val gatheredHeaderRDD = headerRDD.coalesce(1)
+      val outputHeaderRDD = gatheredHeaderRDD.pipe(cmd)
+      val outputVariantsRDD = variantsRDD.pipe(cmd).filter(line => !line.startsWith("#"))
+      val finalResultRDD = outputHeaderRDD
+        .union(outputVariantsRDD)
+        .saveAsSingleTextFile(output_path)
+    }
+  }
+
+
+  implicit class RDDOperators[T](rdd: RDD[T]) {
+    // Split a RDD into 2 parts: 1 part which satisfies the condition and another part which does not satisfy
+    def filterDivisor(f: T => Boolean): (RDD[T], RDD[T]) = {
+      val passes = rdd.filter(f)
+      val fails = rdd.filter(e => !f(e))
+      (passes, fails)
     }
   }
 }
