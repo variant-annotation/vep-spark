@@ -1,4 +1,4 @@
-name := "vepspark"
+name := "vaspark"
 
 version := "0.1"
 

@@ -1,9 +1,10 @@
 package extprg.vep
+import org.apache.spark.SparkContext
 import utils.{ArgumentOption, CommandBuilder, Tool}
+
 import scala.collection.mutable
 import org.apache.spark.sql.SparkSession
-import utils.OutputHandler._
-import org.apache.spark.rdd.RDD
+import utils.CustomOperators._
 
 object VEP {
   val usage = """
@@ -11,17 +12,13 @@ object VEP {
     Usage: vep-spark  [--input_file hdfs_absolute_dir]
                       [--output_file hdfs_absolute_dir]
                       [--vep_dir absolute_dir]
-                      [--cache_dir absolute_dir]
+                      [--dir_cache absolute_dir]
 
     Optional arguments:
-      All ensembl-vep arguments except "--cache", "--cache_dir", "--input_file", "--output_file"
+      All ensembl-vep arguments except "--cache", "--dir_cache", "--input_file", "--output_file"
       NOTE: If you use any ensembl-vep's plugin, please add [--dir_plugins absolute_dir] option
   """
-  def main(args: Array[String]) {
-    val spark = SparkSession.builder()
-       .appName("VEPSpark Application")
-       .master("yarn")
-       .getOrCreate()
+  def annotateByVep(sc: SparkContext, args: Array[ArgumentOption], execDir: String) {
     
     // List of ensemnl-vep's options
     val options: mutable.MutableList[ArgumentOption] = new mutable.MutableList[ArgumentOption]
@@ -39,8 +36,8 @@ object VEP {
           nextOption(map ++ Map("output_file" -> value), tail)
         case "--vep_dir" :: value :: tail =>
           nextOption(map ++ Map("vep_dir" -> value), tail)
-        case "--cache_dir" :: value :: tail =>
-          nextOption(map ++ Map("cache_dir" -> value), tail)
+        case "--dir_cache" :: value :: tail =>
+          nextOption(map ++ Map("dir_cache" -> value), tail)
         case currentParam :: nextParam :: tail if isValue(nextParam) =>
           options += new ArgumentOption(currentParam, nextParam, true)
           nextOption(map, tail)
@@ -60,13 +57,13 @@ object VEP {
         !defaultOptions.contains("input_file") ||
         !defaultOptions.contains("output_file") ||
         !defaultOptions.contains("vep_dir") ||
-        !defaultOptions.contains("cache_dir")
+        !defaultOptions.contains("dir_cache")
     ) {
       print(usage)
     } else {
       val builder = new CommandBuilder(Tool.VEP, defaultOptions.get("vep_dir").mkString, options)
       val cmd = builder.addOption("--cache", null, hasParameter = false)
-        .addOption("--dir_cache", defaultOptions.get("cache_dir").mkString, hasParameter = true)
+        .addOption("--dir_cache", defaultOptions.get("dir_cache").mkString, hasParameter = true)
         .addOption("-o", "STDOUT", hasParameter = true)
         .build()
         .generate
@@ -78,19 +75,9 @@ object VEP {
       val gatheredHeaderRDD = headerRDD.coalesce(1)
       val outputHeaderRDD = gatheredHeaderRDD.pipe(cmd)
       val outputVariantsRDD = variantsRDD.pipe(cmd).filter(line => !line.startsWith("#"))
-      val finalResultRDD = outputHeaderRDD
+      outputHeaderRDD
         .union(outputVariantsRDD)
         .saveAsSingleTextFile(output_path)
-    }
-  }
-
-
-  implicit class RDDOperators[T](rdd: RDD[T]) {
-    // Split a RDD into 2 parts: 1 part which satisfies the condition and another part which does not satisfy
-    def filterDivisor(f: T => Boolean): (RDD[T], RDD[T]) = {
-      val passes = rdd.filter(f)
-      val fails = rdd.filter(e => !f(e))
-      (passes, fails)
     }
   }
 }
