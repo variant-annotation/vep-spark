@@ -1,7 +1,6 @@
 package extprg.annovar
-
+import org.apache.spark.rdd.{RDD, UnionRDD}
 import org.apache.spark.{SparkContext, TaskContext}
-import utils.ArgumentOption
 import utils.CustomOperators._
 import java.io.File
 import scala.collection.mutable.ArrayBuffer
@@ -10,8 +9,8 @@ import scala.reflect.io.Directory
 import scala.util.control.Breaks.{break, breakable}
 
 object ANNOVAR {
+
   def getSuffixList(prjTmpDir: File): ArrayBuffer[String] = {
-    println("Suffix List:")
     val files = prjTmpDir.listFiles()
     var suffix = new String
     val sufList = new ArrayBuffer[String]
@@ -59,30 +58,81 @@ object ANNOVAR {
     annotateInfos
   }
 
+  def mergeTxtCsvFiles(
+                      sc: SparkContext,
+                      numOfPartitions: Int,
+                      suffix: String,
+                      prjTmpDir: String,
+                      outputPath: String
+                      ) {
+    val txtRDDs = new ArrayBuffer[RDD[String]]()
+    txtRDDs += sc.textFile(prjTmpDir + "/0." + suffix)
+    for (i <- 1 until numOfPartitions)
+      if (new File(prjTmpDir + "/" + i.toString + "." + suffix).exists())
+        txtRDDs += sc.textFile(prjTmpDir + "/" + i.toString + "." + suffix).mapPartitionsWithIndex(
+          (index, iterator) => if (index == 0) iterator.drop(1) else iterator
+        )
+    new UnionRDD(sc, txtRDDs)
+      .coalesce(1)
+      .saveAsSingleTextFile(outputPath + "." + suffix)
+  }
 
-  def annotateByAnnovar(sc: SparkContext, args: Array[ArgumentOption], execDir: String): Unit = {
+  def mergeFiles(
+                  sc: SparkContext,
+                  numOfPartitions: Int,
+                  suffix: String,
+                  prjTmpDir: String,
+                  outputPath: String
+                ) {
+    val filePaths = new ArrayBuffer[String]
+    for (i <- 0 until numOfPartitions) {
+      val partFile = new File(prjTmpDir + "/" + i.toString + "." + suffix)
+      if (partFile.exists()) filePaths += partFile.getAbsolutePath
+    }
+    sc.textFile(filePaths.mkString(",")).saveAsSingleTextFile(outputPath + "." + suffix)
+  }
 
+  def mergeVcfFiles(
+                     sc: SparkContext,
+                     numOfPartitions: Int,
+                     suffix: String,
+                     prjTmpDir: String,
+                     outputPath: String,
+                     headerRDD: RDD[String]
+                   ) {
+    val filePaths = new ArrayBuffer[String]
+    for (i <- 0 until numOfPartitions) {
+      val partFile = new File(prjTmpDir + "/" + i.toString + "." + suffix)
+      if (partFile.exists()) filePaths += partFile.getAbsolutePath
+    }
+    headerRDD.union(sc.textFile(filePaths.mkString(","))).saveAsSingleTextFile(outputPath + "." + suffix)
+  }
 
-    val vcfRDD = sc.textFile("/home/ethan/annovar/example/ex2.vcf")
-    //    val vcfRDD = sc.textFile("/home/ethan/vinbdi/ALL.chrY.phase3_integrated_v1a.20130502.genotypes.vcf")
+  def annotateByAnnovar(
+                         sc: SparkContext,
+                         inputPath: String,
+                         outputPath: String,
+                         annovarArgs: String,
+                         execDir: String) {
 
-    val prjPath = getClass.getResource("").getPath
+    // Prepare a temporary directory to save annovar output files
     val tmpDirName = "vaspark_tmp"
-    val prjTmpDir = new File(prjPath, tmpDirName)
+    val prjTmpDir = new File(execDir, tmpDirName)
     if (prjTmpDir.exists())
       if (prjTmpDir.isDirectory) new Directory(prjTmpDir).deleteRecursively()
       else prjTmpDir.delete()
     prjTmpDir.mkdir()
 
-    val annovarPath = "/home/ethan/annovar/"
-    val outputPath = "/home/ethan/annovar/output/hehehe"
-    val annotateCommand = "table_annovar.pl /dev/stdin /home/ethan/annovar/humandb/ -buildver hg19 -remove -protocol refGene,cytoBand,dbnsfp30a -operation g,r,f -nastring . -vcfinput -out "
-    val (inputHeaderRDD, variantsRDD) = vcfRDD.filterDivisor(line => line.startsWith("#"))
+    val inputFileRDD = sc.textFile(inputPath)
+
+    val (inputHeaderRDD, variantsRDD) = inputFileRDD.filterDivisor(line => line.startsWith("#"))
 
     val numOfPartitions = variantsRDD.getNumPartitions
     variantsRDD.mapPartitions(partition => {
       val pId = TaskContext.get().partitionId()
-      val annovarCommand = annovarPath + annotateCommand + prjTmpDir.getAbsolutePath + "/" + pId
+      val tmpOutputDir = prjTmpDir.getAbsolutePath + "/" + pId
+      val annovarCommand =
+        execDir + "table_annovar.pl /dev/stdin " + annovarArgs + " -out " + tmpOutputDir
       partition.pipeCmd(annovarCommand)
     }).collect()
 
@@ -90,33 +140,47 @@ object ANNOVAR {
 
     var vcfHeader = ArrayBuffer(inputHeaderRDD.collect(): _*)
     vcfHeader = vcfHeader.patch(vcfHeader.length - 1, generateVcfHeaderAnnotationINFO(prjTmpDir), 0)
-    vcfHeader.foreach(println)
     val annotatedHeaderRDD = sc.parallelize(vcfHeader)
 
-
+    // Merge output files
     for (suffix <- suffixList) {
-      val filePaths = new ArrayBuffer[String]
-      if (suffix.endsWith(".txt")) {
-        val txtHeaderRDD = sc.textFile(prjTmpDir + "/0." + suffix)
-        for (i <- 1 until numOfPartitions) {
-          val partFile = new File(prjTmpDir + "/" + i.toString + "." + suffix)
-          if (partFile.exists()) filePaths += partFile.getAbsolutePath
-        }
-        val txtFilesRDD = sc.textFile(filePaths.mkString(",")).mapPartitionsWithIndex(
-          (index, iterator) => if (index == 0) iterator.drop(1) else iterator
-        )
-        txtHeaderRDD.union(txtFilesRDD).saveAsSingleTextFile(outputPath + "." + suffix)
-      } else {
-        for (i <- 0 until numOfPartitions) {
-          val partFile = new File(prjTmpDir + "/" + i.toString + "." + suffix)
-          if (partFile.exists()) filePaths += partFile.getAbsolutePath
-        }
-        val outputRDD = sc.textFile(filePaths.mkString(","))
-        if (suffix.endsWith(".vcf"))
-          annotatedHeaderRDD.union(outputRDD).saveAsSingleTextFile(outputPath + "." + suffix)
-        else
-          outputRDD.saveAsSingleTextFile(outputPath + "." + suffix)
+      suffix.substring(suffix.length - 3) match {
+        case "txt" =>
+          mergeTxtCsvFiles(
+            sc,
+            numOfPartitions,
+            suffix,
+            prjTmpDir.getAbsolutePath,
+            outputPath
+          )
+        case "csv" =>
+          mergeTxtCsvFiles(
+            sc,
+            numOfPartitions,
+            suffix,
+            prjTmpDir.getAbsolutePath,
+            outputPath
+          )
+        case "vcf" =>
+          mergeVcfFiles(
+            sc,
+            numOfPartitions,
+            suffix,
+            prjTmpDir.getAbsolutePath,
+            outputPath,
+            annotatedHeaderRDD
+          )
+        case _ =>
+          mergeFiles(
+            sc,
+            numOfPartitions,
+            suffix,
+            prjTmpDir.getAbsolutePath,
+            outputPath
+          )
       }
     }
+
+    new Directory(prjTmpDir).deleteRecursively()
   }
 }
