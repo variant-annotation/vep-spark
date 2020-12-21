@@ -95,7 +95,6 @@ object VASparkApplication extends App {
       // Initialize Spark Application
       val spark = SparkSession.builder()
         .appName("VASpark Application")
-        .master("local[*]")
         .getOrCreate()
       val sc = spark.sparkContext
 
