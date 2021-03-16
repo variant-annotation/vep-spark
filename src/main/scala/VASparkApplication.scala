@@ -49,30 +49,34 @@ object VASparkApplication extends App {
           |
           |   Examples:
           |    Annovar sample command:
-          |     spark-submit /home/ethan/vaspark/target/scala-2.11/vaspark-0.1.jar \
+          |     spark-submit \
           |     --master local[*] \
+          |     /home/ubuntu/vaspark/target/scala-2.11/vaspark-0.1.jar \
           |     --annotation_tool annovar \
+          |     --tool_dir /path/to/annovar/ \
           |     -i /path/to/vcf/file/sample.vcf \
           |     -o /path/to/output/files/myanno \
-          |     --tool_dir /path/to/annovar/ \
           |     --tool_args "/path/to/annovar/humandb/ -buildver hg19 -remove -protocol refGene,cytoBand,dbnsfp30a -operation g,r,f -nastring . -vcfinput"
           |
           |    Ensembl vep sample command:
-          |     spark-submit /home/ethan/vaspark/target/scala-2.11/vaspark-0.1.jar \
+          |     spark-submit \
           |     --master local[*] \
+          |     /home/ubuntu/vaspark/target/scala-2.11/vaspark-0.1.jar \
           |     --annotation_tool vep \
+          |     --tool_dir /path/to/ensembl/vep \
           |     -i /path/to/vcf/file/sample.vcf \
           |     -o /path/to/output/files/output.vcf \
           |     --tool_dir /path/to/ensembl/vep \
-          |     --tool_args "--format vcf --no_stats --force_overwrite --cache_dir /home/.vep --offline --vcf --vcf_info_field ANN --buffer_size 60000 --phased --hgvsg --hgvs --symbol --variant_class --biotype --gene_phenotype --regulatory --ccds --transcript_version --tsl --appris --canonical --protein --uniprot --domains --sift b --polyphen b --check_existing --af --max_af --af_1kg --af_gnomad --minimal --allele_number --pubmed --fasta /home/.vep/homo_sapiens/100_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz "
+          |     --tool_args "--format vcf --no_stats --force_overwrite --cache_dir /home/.vep --offline --vcf --vcf_info_field ANN --buffer_size 60000 --phased --hgvsg --hgvs --symbol --variant_class --biotype --gene_phenotype --regulatory --ccds --transcript_version --tsl --appris --canonical --protein --uniprot --domains --sift b --polyphen b --check_existing --af --max_af --af_1kg --af_gnomad --minimal --allele_number --pubmed --fasta /home/ubuntu/.vep/homo_sapiens/100_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz "
           |
           |    SnpEff sample command:
-          |     spark-submit /home/ethan/vaspark/target/scala-2.11/vaspark-0.1.jar \
+          |     spark-submit
           |     --master local[*] \
+          |     /home/ubuntu/vaspark/target/scala-2.11/vaspark-0.1.jar \
           |     --annotation_tool snpeff \
+          |     --tool_dir /path/to/snpeff/snpeff.jar \
           |     -i /path/to/vcf/file/sample.vcf \
           |     -o /path/to/output/files/output.vcf \
-          |     --tool_dir /path/to/snpeff/snpeff.jar \
           |     --tool_args "-v -canon GRCh37.99"
           |
           |
@@ -91,7 +95,6 @@ object VASparkApplication extends App {
       // Initialize Spark Application
       val spark = SparkSession.builder()
         .appName("VASpark Application")
-        .master("local[*]")
         .getOrCreate()
       val sc = spark.sparkContext
 
